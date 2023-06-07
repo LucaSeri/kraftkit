@@ -21,6 +21,7 @@ type OCIManagerOption func(context.Context, *ociManager) error
 // client to enable the handler.
 func WithDetectHandler() OCIManagerOption {
 	return func(ctx context.Context, manager *ociManager) error {
+		fmt.Printf("detecting handler\n")
 		if contAddr := config.G[config.KraftKit](ctx).ContainerdAddr; len(contAddr) > 0 {
 			namespace := DefaultNamespace
 			if n := os.Getenv("CONTAINERD_NAMESPACE"); n != "" {
@@ -34,6 +35,13 @@ func WithDetectHandler() OCIManagerOption {
 
 			manager.handle = func(ctx context.Context) (context.Context, handler.Handler, error) {
 				return handler.NewContainerdHandler(ctx, contAddr, namespace)
+			}
+
+			return nil
+		} else if dockerAddr := config.G[config.KraftKit](ctx).DockerAddr; len(dockerAddr) > 0 {
+			log.G(ctx).WithField("addr", dockerAddr).Debug("using docker handler")
+			manager.handle = func(ctx context.Context) (context.Context, handler.Handler, error) {
+				return handler.NewDockerHandler(ctx, dockerAddr)
 			}
 
 			return nil

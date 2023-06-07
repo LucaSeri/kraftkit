@@ -137,6 +137,7 @@ func (handle *ContainerdHandler) ListManifests(ctx context.Context) (manifests [
 
 // PushDigest implements DigestPusher.
 func (handle *ContainerdHandler) PushDigest(ctx context.Context, ref string, desc ocispec.Descriptor, reader io.Reader, onProgress func(float64)) (err error) {
+	fmt.Printf("Im running push digest\n")
 	ctx, done, err := handle.lease(ctx)
 	if err != nil {
 		return err
@@ -274,6 +275,7 @@ func (handle *ContainerdHandler) ResolveImage(ctx context.Context, fullref strin
 
 // FetchImage implements ImageFetcher.
 func (handle *ContainerdHandler) FetchImage(ctx context.Context, name string, onProgress func(float64)) (err error) {
+	fmt.Printf("Fetching image\n")
 	ctx, done, err := handle.lease(ctx)
 	if err != nil {
 		return err

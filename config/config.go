@@ -27,6 +27,7 @@ type KraftKit struct {
 	DefaultPlat    string `yaml:"default_plat" env:"KRAFTKIT_DEFAULT_PLAT" usage:"The default platform to use when invoking platform-specific code" noattribute:"true"`
 	DefaultArch    string `yaml:"default_arch" env:"KRAFTKIT_DEFAULT_ARCH" usage:"The default architecture to use when invoking architecture-specific code" noattribute:"true"`
 	ContainerdAddr string `yaml:"containerd_addr,omitempty" env:"KRAFTKIT_CONTAINERD_ADDR" long:"containerd-addr" usage:"Address of containerd daemon socket" default:""`
+	DockerAddr     string `yaml:"docker_addr,omitempty" env:"KRAFTKIT_DOCKER_ADDR" long:"docker-addr" usage:"Address of Docker daemon socket" default:""`
 	EventsPidFile  string `yaml:"events_pidfile" env:"KRAFTKIT_EVENTS_PIDFILE" long:"events-pid-file" usage:"Events process ID used when running multiple unikernels" default:"/var/kraftkit/events.pid"`
 
 	Paths struct {

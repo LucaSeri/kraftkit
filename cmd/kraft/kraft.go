@@ -96,8 +96,47 @@ func New() *cobra.Command {
 }
 
 func (k *Kraft) Run(cmd *cobra.Command, args []string) error {
+	// For testing purposes, just check if the docker daemon is running
+
+	// ctx := cmd.Context()
+	// ctx, hand, err := handler.NewContainerdHandler(ctx, "/run/containerd/containerd.sock", "")
+	// if err != nil {
+	// 	return err
+	// }
+
+	// img, err := hand.ResolveImage(ctx, "example.com/helloworld:latest")
+	// if err != nil {
+	// 	return err
+	// }
+
+	// fmt.Println()
+
+	// // return nil
+
+	// ctx, handd, err := handler.NewDockerHandler(ctx, "unix:///var/run/docker.sock", "")
+	// if err != nil {
+	// 	return err
+	// }
+
+	// err = handd.FetchImage(ctx, "docker.io/nginx:latest", progress)
+
+	// if err != nil {
+	// 	return err
+	// } else {
+	// 	fmt.Println("Image fetched successfully!")
+	// }
+
+	// return nil
+	// fmt.Println(img)
+	// fmt.Println()
+
+	// return nil
 	return cmd.Help()
 }
+
+// func progress(float64) {
+// 	fmt.Println("Progress!")
+// }
 
 func main() {
 	cmd := New()

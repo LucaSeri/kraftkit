@@ -43,6 +43,8 @@ const OCIFormat pack.PackageFormat = "oci"
 func NewOCIManager(ctx context.Context, opts ...any) (packmanager.PackageManager, error) {
 	manager := ociManager{}
 
+	fmt.Printf("Running NewOCIManager\n")
+	fmt.Printf("opts: %v\n", opts)
 	for _, mopt := range opts {
 		opt, ok := mopt.(OCIManagerOption)
 		if !ok {
