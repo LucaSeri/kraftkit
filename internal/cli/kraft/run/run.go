@@ -8,12 +8,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"strings"
-	"time"
 
 	"github.com/MakeNowJust/heredoc"
-	"github.com/rancher/wrangler/pkg/signals"
 	"github.com/spf13/cobra"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -22,6 +19,7 @@ import (
 	machineapi "kraftkit.sh/api/machine/v1alpha1"
 	networkapi "kraftkit.sh/api/network/v1alpha1"
 	"kraftkit.sh/cmdfactory"
+	"kraftkit.sh/internal/cli/kraft/logs"
 	"kraftkit.sh/internal/set"
 	"kraftkit.sh/iostreams"
 	"kraftkit.sh/log"
@@ -42,8 +40,10 @@ type RunOptions struct {
 	Memory        string   `long:"memory" short:"M" usage:"Assign memory to the unikernel (K/Ki, M/Mi, G/Gi)" default:"64Mi"`
 	Name          string   `long:"name" short:"n" usage:"Name of the instance"`
 	Network       string   `long:"network" usage:"Attach instance to the provided network in the format <driver>:<network>, e.g. bridge:kraft0"`
+	NoColor       bool     `long:"no-color" usage:"Disable color output for prefix"`
 	Platform      string   `noattribute:"true"`
 	Ports         []string `long:"port" short:"p" usage:"Publish a machine's port(s) to the host" split:"false"`
+	Prefix        string   `long:"prefix" usage:"Prefix each log line with the given string (name expands to machine name)"`
 	Remove        bool     `long:"rm" usage:"Automatically remove the unikernel when it shutsdown"`
 	Rootfs        string   `long:"rootfs" usage:"Specify a path to use as root file system (can be volume or initramfs)"`
 	RunAs         string   `long:"as" usage:"Force a specific runner"`
@@ -345,97 +345,24 @@ func (opts *RunOptions) Run(ctx context.Context, args []string) error {
 		return err
 	}
 
-	var exitErr error
-	requestShutdown := false
-	logsFinished := make(chan bool, 1)
-
-	// Tail the logs if -d|--detach is not provided
-	if !opts.Detach {
-		go func() {
-			events, errs, err := opts.machineController.Watch(ctx, machine)
-			if err != nil {
-				log.G(ctx).Errorf("could not listen for machine updates: %v", err)
-				signals.RequestShutdown()
-				return
-			}
-
-			log.G(ctx).Trace("waiting for machine events")
-
-		loop:
-			for {
-				if requestShutdown {
-					<-logsFinished
-					signals.RequestShutdown()
-					break loop
-				}
-
-				// Wait on either channel
-				select {
-				case update := <-events:
-					switch update.Status.State {
-					case machineapi.MachineStateErrored:
-						signals.RequestShutdown()
-						exitErr = fmt.Errorf("machine fatally exited")
-						requestShutdown = true
-
-					case machineapi.MachineStateExited, machineapi.MachineStateFailed:
-						requestShutdown = true
-					}
-
-				case err := <-errs:
-					log.G(ctx).Errorf("received event error: %v", err)
-					signals.RequestShutdown()
-					break loop
-
-				case <-ctx.Done():
-					requestShutdown = true
-				}
-			}
-		}()
-	}
-
 	// Start the machine
 	_, err = opts.machineController.Start(ctx, machine)
 	if err != nil {
-		signals.RequestShutdown()
 		return err
 	}
 
+	var exitErr error
 	if !opts.Detach {
-		logs, errs, err := opts.machineController.Logs(ctx, machine)
+		if opts.Prefix == "name" {
+			opts.Prefix = machine.Name
+		}
+
+		consumer, err := logs.NewColorfulConsumer(iostreams.G(ctx), !opts.NoColor, opts.Prefix)
 		if err != nil {
-			signals.RequestShutdown()
-			return fmt.Errorf("could not listen for machine logs: %v", err)
+			return err
 		}
 
-		var line string
-	loop:
-		for {
-			// Wait on either channel
-			select {
-			case <-time.After(10 * time.Millisecond):
-				if requestShutdown && line == "" {
-					break loop
-				} else if line != "" {
-					line = ""
-				}
-
-			case line = <-logs:
-				fmt.Fprint(iostreams.G(ctx).Out, line)
-
-			case err := <-errs:
-				if errors.Is(err, io.EOF) && requestShutdown {
-					break loop
-				} else if !errors.Is(err, io.EOF) {
-					log.G(ctx).Errorf("received log error: %v", err)
-					signals.RequestShutdown()
-					break loop
-				}
-
-			case <-ctx.Done():
-				break loop
-			}
-		}
+		exitErr = logs.FollowLogs(ctx, machine, opts.machineController, consumer)
 
 		// Remove the instance on Ctrl+C if the --rm flag is passed
 		if opts.Remove {
@@ -478,10 +405,6 @@ func (opts *RunOptions) Run(ctx context.Context, args []string) error {
 		if _, err = opts.networkController.Update(ctx, found); err != nil {
 			return fmt.Errorf("could not update network %s: %v", opts.networkName, err)
 		}
-	}
-
-	if !opts.Detach {
-		logsFinished <- true
 	}
 
 	return exitErr
