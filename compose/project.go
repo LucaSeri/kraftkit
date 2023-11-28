@@ -10,6 +10,7 @@ package compose
 import (
 	"context"
 	"fmt"
+	"net"
 	"os"
 	"strings"
 
@@ -109,6 +110,80 @@ func (project *Project) Validate(ctx context.Context) error {
 			project.Services[i].Platform = fmt.Sprint(hostPlatform, "/", hostArch)
 
 		}
+	}
+
+	// Go through the network and fill in the project name where needed
+	for i, network := range project.Networks {
+		if network.Name[0] == '_' {
+			network.Name = project.Name + network.Name
+			project.Networks[i] = network
+		}
+	}
+
+	// Remove the default network
+	delete(project.Networks, "default")
+
+	// Currently we need to specify the network driver and IPAM config
+	// manually, so check we have that. This can be improved in the future
+	// by defaulting in a smart way.
+	for i, network := range project.Networks {
+		if network.Driver == "" {
+			network.Driver = network.Ipam.Driver
+		}
+		if network.Driver == "" {
+			return fmt.Errorf("network %s has no driver specified", network.Name)
+		}
+
+		if network.Ipam.Config == nil || len(network.Ipam.Config) == 0 {
+			return fmt.Errorf("network %s has no IPAM config specified", network.Name)
+		}
+
+		// Join all the IPAM configs together
+		ipamConfig := network.Ipam.Config[0]
+		for _, config := range network.Ipam.Config[1:] {
+			if config.Subnet != "" {
+				ipamConfig.Subnet = config.Subnet
+			}
+			if config.Gateway != "" {
+				ipamConfig.Gateway = config.Gateway
+			}
+		}
+
+		if ipamConfig.Subnet == "" {
+			return fmt.Errorf("network %s has no subnet specified", network.Name)
+		}
+
+		// Check that the subnet is of type addr/subnet
+		if len(strings.Split(ipamConfig.Subnet, "/")) != 2 {
+			return fmt.Errorf("network %s has an invalid subnet specified", network.Name)
+		}
+
+		subnetIP, subnetMask, err := net.ParseCIDR(ipamConfig.Subnet)
+		if err != nil {
+			return fmt.Errorf("failed to parse %s network subnet", network.Name)
+		}
+
+		if subnetMask == nil {
+			return fmt.Errorf("failed to parse network %s subnet mask", network.Name)
+		}
+
+		// Check that the gateway is of type addr
+		if ipamConfig.Gateway == "" {
+			ipamConfig.Gateway = subnetIP.String()
+		} else {
+			// Additionally check the gateway is part of the subnet
+			gatewayIP := net.ParseIP(ipamConfig.Gateway)
+			if gatewayIP == nil {
+				return fmt.Errorf("failed to parse %s network gateway", network.Name)
+			}
+
+			if !subnetMask.Contains(gatewayIP) {
+				return fmt.Errorf("network %s gateway is not within the subnet", network.Name)
+			}
+		}
+
+		network.Ipam.Config[0] = ipamConfig
+		project.Networks[i] = network
 	}
 
 	return nil
