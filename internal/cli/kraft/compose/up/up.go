@@ -18,14 +18,17 @@ import (
 	"kraftkit.sh/cmdfactory"
 	"kraftkit.sh/compose"
 	"kraftkit.sh/internal/cli/kraft/build"
+	"kraftkit.sh/internal/cli/kraft/net/create"
 	"kraftkit.sh/internal/cli/kraft/pkg"
 	"kraftkit.sh/internal/cli/kraft/pkg/pull"
 	"kraftkit.sh/internal/cli/kraft/run"
 	"kraftkit.sh/log"
+	"kraftkit.sh/machine/network"
 	"kraftkit.sh/packmanager"
 	"kraftkit.sh/unikraft"
 
 	machineapi "kraftkit.sh/api/machine/v1alpha1"
+	networkapi "kraftkit.sh/api/network/v1alpha1"
 	mplatform "kraftkit.sh/machine/platform"
 )
 
@@ -77,27 +80,24 @@ func (opts *UpOptions) Run(ctx context.Context, args []string) error {
 		return err
 	}
 
-	// Check that none of the services are already running
-	controller, err := mplatform.NewMachineV1alpha1ServiceIterator(ctx)
-	if err != nil {
+	if err := checkClean(ctx, project); err != nil {
 		return err
-	}
-
-	machines, err := controller.List(ctx, &machineapi.MachineList{})
-	if err != nil {
-		return err
-	}
-
-	for _, service := range project.Services {
-		for _, machine := range machines.Items {
-			if service.Name == machine.Name {
-				return fmt.Errorf("service %s already running or exited", service.Name)
-			}
-		}
 	}
 
 	for _, service := range project.Services {
 		if err := ensureServiceIsPackaged(ctx, service); err != nil {
+			return err
+		}
+	}
+
+	// Create the networks
+	for _, projectNetwork := range project.Networks {
+		createOpts := create.CreateOptions{
+			Driver:  projectNetwork.Driver,
+			Network: projectNetwork.Ipam.Config[0].Subnet,
+		}
+
+		if err := createOpts.Run(ctx, []string{projectNetwork.Name}); err != nil {
 			return err
 		}
 	}
@@ -117,13 +117,68 @@ func (opts *UpOptions) Run(ctx context.Context, args []string) error {
 		go func(service types.ServiceConfig) {
 			defer wg.Done()
 
-			if err := runService(ctx, service, longestName); err != nil {
+			if err := runService(ctx, project, service, longestName); err != nil {
 				log.G(ctx).WithError(err).Errorf("failed to run service %s", service.Name)
 			}
 		}(project.Services[i])
 	}
 
 	wg.Wait()
+
+	return nil
+}
+
+func checkClean(ctx context.Context, project *compose.Project) error {
+	// Check that none of the services are already running
+	controller, err := mplatform.NewMachineV1alpha1ServiceIterator(ctx)
+	if err != nil {
+		return err
+	}
+
+	machines, err := controller.List(ctx, &machineapi.MachineList{})
+	if err != nil {
+		return err
+	}
+
+	for _, service := range project.Services {
+		for _, machine := range machines.Items {
+			if service.Name == machine.Name {
+				return fmt.Errorf("service %s already running or exited", service.Name)
+			}
+		}
+	}
+
+	// Check that none of the network already exist
+	driverNetworks := make(map[string]map[string]bool)
+
+	for _, projectNetwork := range project.Networks {
+		if _, ok := driverNetworks[projectNetwork.Driver]; !ok {
+			strategy, ok := network.Strategies()[projectNetwork.Driver]
+			if !ok {
+				return fmt.Errorf("unsupported network driver strategy: %s", projectNetwork.Driver)
+			}
+
+			controller, err := strategy.NewNetworkV1alpha1(ctx)
+			if err != nil {
+				return err
+			}
+
+			networks, err := controller.List(ctx, &networkapi.NetworkList{})
+			if err != nil {
+				return err
+			}
+
+			driverNetworks[projectNetwork.Driver] = make(map[string]bool)
+
+			for _, network := range networks.Items {
+				driverNetworks[projectNetwork.Driver][network.Name] = true
+			}
+		}
+
+		if _, ok := driverNetworks[projectNetwork.Driver][projectNetwork.Name]; ok {
+			return fmt.Errorf("network %s already exists", projectNetwork.Name)
+		}
+	}
 
 	return nil
 }
@@ -243,7 +298,7 @@ func pkgService(ctx context.Context, service types.ServiceConfig) error {
 	return pkgOptions.Run(ctx, []string{service.Build.Context})
 }
 
-func runService(ctx context.Context, service types.ServiceConfig, prefixLength int) error {
+func runService(ctx context.Context, project *compose.Project, service types.ServiceConfig, prefixLength int) error {
 	// The service should be packaged at this point
 	plat, arch, err := platArchFromService(service)
 	if err != nil {
@@ -254,7 +309,15 @@ func runService(ctx context.Context, service types.ServiceConfig, prefixLength i
 
 	prefix := service.Name + strings.Repeat(" ", prefixLength-len(service.Name))
 
-	runOptions := run.RunOptions{RunAs: "oci", Platform: plat, Architecture: arch, Name: service.Name, Prefix: prefix}
+	network := ""
+	ip := ""
+
+	for name, serviceNetwork := range service.Networks {
+		network = project.Networks[name].Driver + ":" + project.Networks[name].Name
+		ip = serviceNetwork.Ipv4Address
+	}
+
+	runOptions := run.RunOptions{RunAs: "oci", Platform: plat, Architecture: arch, Name: service.Name, Prefix: prefix, Network: network, IP: ip}
 
 	return runOptions.Run(ctx, []string{service.Image})
 }
