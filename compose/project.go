@@ -18,6 +18,7 @@ import (
 	"github.com/compose-spec/compose-go/types"
 
 	"kraftkit.sh/log"
+	"kraftkit.sh/machine/network/bridge"
 	mplatform "kraftkit.sh/machine/platform"
 	ukarch "kraftkit.sh/unikraft/arch"
 )
@@ -122,6 +123,7 @@ func (project *Project) Validate(ctx context.Context) error {
 
 	// Remove the default network
 	delete(project.Networks, "default")
+	usedAddrs := make(map[string]map[string]bool)
 
 	// Currently we need to specify the network driver and IPAM config
 	// manually, so check we have that. This can be improved in the future
@@ -133,7 +135,6 @@ func (project *Project) Validate(ctx context.Context) error {
 		if network.Driver == "" {
 			return fmt.Errorf("network %s has no driver specified", network.Name)
 		}
-
 		if network.Ipam.Config == nil || len(network.Ipam.Config) == 0 {
 			return fmt.Errorf("network %s has no IPAM config specified", network.Name)
 		}
@@ -182,9 +183,79 @@ func (project *Project) Validate(ctx context.Context) error {
 			}
 		}
 
+		usedAddrs[i] = make(map[string]bool)
+		usedAddrs[i][ipamConfig.Gateway] = true
+		usedAddrs[i][subnetMask.IP.String()] = true
 		network.Ipam.Config[0] = ipamConfig
 		project.Networks[i] = network
 	}
 
+	// Check the services networks
+	for _, service := range project.Services {
+		if service.Networks == nil {
+			continue
+		}
+		delete(service.Networks, "default")
+		for name, network := range service.Networks {
+			if _, ok := project.Networks[name]; !ok {
+				return fmt.Errorf("service %s references non-existent network %s", service.Name, name)
+			}
+
+			if network == nil {
+				service.Networks[name] = &types.ServiceNetworkConfig{}
+				network = service.Networks[name]
+			}
+
+			// If the network has an ipv4_address specified, check it is
+			// valid and not already used
+			if network.Ipv4Address != "" {
+				ip := net.ParseIP(network.Ipv4Address)
+				if ip == nil {
+					return fmt.Errorf("service %s has an invalid ipv4_address specified", service.Name)
+				}
+
+				if usedAddrs[name][ip.String()] {
+					return fmt.Errorf("service %s has an ipv4_address that is already in use", service.Name)
+				}
+
+				usedAddrs[name][ip.String()] = true
+			}
+		}
+	}
+
+	// Run through the services again and assign an IP address to each
+	for i, service := range project.Services {
+		for name, network := range service.Networks {
+			if network == nil {
+				continue
+			}
+			if network.Ipv4Address == "" {
+				// Start at the network's subnet IP and increment until we find
+				// a free one
+				_, subnet, err := net.ParseCIDR(project.Networks[name].Ipam.Config[0].Subnet)
+				if err != nil {
+					return err
+				}
+
+				if subnet == nil {
+					// This should not be possible
+					return fmt.Errorf("failed to parse network %s subnet", name)
+				}
+
+				ip := subnet.IP
+
+				for subnet.Contains(ip) && usedAddrs[name][ip.String()] {
+					ip = bridge.IncreaseIP(ip)
+				}
+
+				if !subnet.Contains(ip) {
+					return fmt.Errorf("not enough free IP addresses in network %s", name)
+				}
+
+				project.Services[i].Networks[name].Ipv4Address = ip.String()
+				usedAddrs[name][ip.String()] = true
+			}
+		}
+	}
 	return nil
 }
