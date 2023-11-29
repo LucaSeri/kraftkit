@@ -7,6 +7,7 @@ package down
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/MakeNowJust/heredoc"
 	"github.com/compose-spec/compose-go/types"
@@ -14,11 +15,14 @@ import (
 	"github.com/spf13/cobra"
 	"kraftkit.sh/cmdfactory"
 	"kraftkit.sh/compose"
+	netremove "kraftkit.sh/internal/cli/kraft/net/remove"
 	"kraftkit.sh/internal/cli/kraft/remove"
 	"kraftkit.sh/log"
 	"kraftkit.sh/packmanager"
 
 	machineapi "kraftkit.sh/api/machine/v1alpha1"
+	networkapi "kraftkit.sh/api/network/v1alpha1"
+	"kraftkit.sh/machine/network"
 	mplatform "kraftkit.sh/machine/platform"
 )
 
@@ -90,6 +94,41 @@ func (opts *DownOptions) Run(ctx context.Context, args []string) error {
 		}
 	}
 
+	driverNetworks := make(map[string][]string)
+
+	for _, projectNetwork := range project.Networks {
+		if _, ok := driverNetworks[projectNetwork.Driver]; !ok {
+			strategy, ok := network.Strategies()[projectNetwork.Driver]
+			if !ok {
+				return fmt.Errorf("unsupported network driver strategy: %s", projectNetwork.Driver)
+			}
+
+			controller, err := strategy.NewNetworkV1alpha1(ctx)
+			if err != nil {
+				return err
+			}
+
+			networks, err := controller.List(ctx, &networkapi.NetworkList{})
+			if err != nil {
+				return err
+			}
+
+			driverNetworks[projectNetwork.Driver] = []string{}
+
+			for _, network := range networks.Items {
+				driverNetworks[projectNetwork.Driver] = append(driverNetworks[projectNetwork.Driver], network.Name)
+			}
+		}
+
+		for _, existingNetwork := range driverNetworks[projectNetwork.Driver] {
+			if projectNetwork.Name == existingNetwork {
+				if err := removeNetwork(ctx, projectNetwork); err != nil {
+					return err
+				}
+			}
+		}
+	}
+
 	return nil
 }
 
@@ -98,4 +137,11 @@ func removeService(ctx context.Context, service types.ServiceConfig) error {
 	removeOptions := remove.RemoveOptions{Platform: "auto"}
 
 	return removeOptions.Run(ctx, []string{service.Name})
+}
+
+func removeNetwork(ctx context.Context, network types.NetworkConfig) error {
+	log.G(ctx).Infof("Removing network %s...", network.Name)
+	removeOptions := netremove.RemoveOptions{Driver: network.Driver}
+
+	return removeOptions.Run(ctx, []string{network.Name})
 }
