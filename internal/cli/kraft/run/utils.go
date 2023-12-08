@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/containerd/nerdctl/pkg/strutil"
 	"github.com/dustin/go-humanize"
@@ -42,8 +43,13 @@ func (opts *RunOptions) parsePorts(_ context.Context, machine *machineapi.Machin
 	return nil
 }
 
+var networkMutex sync.Mutex
+
 // Was a network specified? E.g. --network=bridge:kraft0
 func (opts *RunOptions) parseNetworks(ctx context.Context, machine *machineapi.Machine) error {
+	networkMutex.Lock()
+	defer networkMutex.Unlock()
+
 	if opts.Network == "" {
 		return nil
 	}
