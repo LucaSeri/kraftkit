@@ -25,8 +25,13 @@ type NetworkInterfaceSpec struct {
 	// The name of the interface.
 	IfName string `json:"ifname,omitempty"`
 
-	// IP address of a machine interface.
-	IP string `json:"ip,omitempty"`
+	// Fields used to define a NetdevIp.
+	CIDR     string
+	Gateway  string
+	DNS0     string
+	DNS1     string
+	Hostname string
+	Domain   string
 
 	// Hardware address of a machine interface.
 	MacAddress string `json:"mac,omitempty"`
